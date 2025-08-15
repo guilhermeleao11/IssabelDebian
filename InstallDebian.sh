@@ -1,158 +1,160 @@
 #!/bin/bash
-
 ################################################################################
-# Nome do Script : install_issabel_asterisk20.sh
-# Desenvolvedor  : Guilherme Leão - Telium Network (revisado)
-# Data           : 15/08/2025
-# Versão         : 2.0
-# Objetivo       : Instalar Issabel no Debian 12 com Asterisk 20 LTS (pjsip + chansip + CDR)
+# Script de instalação Asterisk 20 LTS + Issabel no Debian 12
+# Autor: Guilherme Leão
+# Objetivo: Instalar Asterisk 20 LTS com suporte chan_sip + pjsip + CDR
+#           e instalar Issabel, mantendo o Asterisk já instalado.
 ################################################################################
 
-# ===== VARIÁVEIS =====
-ASTERISK_VERSION="20.9.3"
-ASTERISK_URL="https://downloads.asterisk.org/pub/telephony/asterisk/releases"
-SENHA_MANAGER="${1:-senha123}"  # Pode passar a senha na chamada do script
-LOG_FILE="/var/log/install_issabel_asterisk.log"
+# --- Variáveis ---
+AST_VER="20.7.0"  # Última LTS estável
+AST_USER="asterisk"
+AMI_USER="admin"
+AMI_PASS="Mudar123@"    # Senha AMI
+DB_PASS="Mudar123@"     # Senha root do MariaDB
 
-# ===== FUNÇÃO DE LOG =====
-log() {
-    echo -e "\e[32m[INFO]\e[0m $1"
-    echo "[INFO] $1" >> "$LOG_FILE"
-}
-
-# ===== CHECK DO SISTEMA =====
-check_sistema() {
-    log "Verificando sistema..."
-    if [[ "$(id -u)" -ne 0 ]]; then
-        echo "Este script precisa ser executado como root!"
+# --- Funções ---
+check_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "Este script precisa ser executado como root."
         exit 1
     fi
-    apt update -y && apt upgrade -y
 }
 
-# ===== INSTALAR DEPENDÊNCIAS =====
-instalar_dependencias() {
-    log "Instalando dependências..."
-    apt install -y build-essential git wget curl unzip tar \
-        libxml2-dev libncurses5-dev uuid-dev libjansson-dev \
-        libssl-dev libsqlite3-dev libedit-dev pkg-config \
-        unixodbc unixodbc-dev libmyodbc libpq-dev \
-        mariadb-server mariadb-client \
-        php php-cli php-mysql php-mbstring php-pear php-xml \
-        libapache2-mod-php apache2 sox mpg123
-}
-
-# ===== INSTALAR PHP 7.4 =====
-instalar_php74() {
-    log "Instalando PHP 7.4..."
-    apt install -y ca-certificates apt-transport-https software-properties-common
-    add-apt-repository ppa:ondrej/php -y
+install_deps() {
+    echo "Instalando dependências..."
     apt update
-    apt install -y php7.4 php7.4-cli php7.4-mysql php7.4-mbstring php7.4-xml libapache2-mod-php7.4
+    apt install -y curl wget build-essential git subversion \
+        libxml2-dev libncurses5-dev uuid-dev libjansson-dev libssl-dev \
+        libsqlite3-dev libedit-dev pkg-config automake libtool \
+        mariadb-server mariadb-client unixodbc unixodbc-dev libmyodbc \
+        odbcinst odbcinst1debian2 bison flex
 }
 
-# ===== CRIAR USUÁRIO ASTERISK =====
-criar_usuario_asterisk() {
-    log "Criando usuário e diretórios do Asterisk..."
-    if ! id -u asterisk >/dev/null 2>&1; then
-        useradd -r -s /usr/sbin/nologin -d /var/lib/asterisk asterisk
-    fi
-    mkdir -p /var/{lib,log,spool,run}/asterisk
-    chown -R asterisk:asterisk /var/{lib,log,spool,run}/asterisk
+install_php74() {
+    echo "Instalando PHP 7.4 (repositório Sury)..."
+    apt install -y lsb-release ca-certificates apt-transport-https software-properties-common gnupg2
+    wget -qO - https://packages.sury.org/php/apt.gpg | apt-key add -
+    echo "deb https://packages.sury.org/php $(lsb_release -sc) main" | tee /etc/apt/sources.list.d/php.list
+    apt update
+    apt install -y php7.4 php7.4-cli php7.4-mysql php7.4-gd php7.4-curl php7.4-xml php7.4-mbstring
 }
 
-# ===== CONFIGURAR MENUSELECT =====
-configurar_menuselect() {
-    log "Configurando módulos do Asterisk..."
-    make menuselect.makeopts
-    menuselect/menuselect \
-        --enable cdr_csv \
-        --enable cdr_adaptive_odbc \
-        --enable chan_pjsip \
-        --enable chan_sip \
-        --enable app_macro \
-        --enable res_http_websocket \
-        --enable res_pjproject \
-        --enable res_pjsip \
-        --enable res_pjsip_endpoint_identifier_ip \
-        --enable res_pjsip_exten_state \
-        --enable res_pjsip_logger \
-        --enable res_pjsip_registrar \
-        --enable res_pjsip_sdp_rtp \
-        --enable res_rtp_asterisk \
-        --enable res_srtp \
-        --enable res_stasis \
-        menuselect.makeopts
+create_asterisk_user() {
+    echo "Criando usuário $AST_USER..."
+    adduser --quiet --system --group --home /var/lib/asterisk $AST_USER
 }
 
-# ===== INSTALAR ASTERISK =====
-instalar_asterisk() {
-    log "Baixando e compilando Asterisk $ASTERISK_VERSION..."
+install_asterisk() {
+    echo "Baixando e instalando Asterisk $AST_VER..."
     cd /usr/src
-    wget -q "${ASTERISK_URL}/asterisk-${ASTERISK_VERSION}.tar.gz"
-    tar xzf "asterisk-${ASTERISK_VERSION}.tar.gz"
-    cd "asterisk-${ASTERISK_VERSION}"
-    contrib/scripts/install_prereq install
+    wget https://downloads.asterisk.org/pub/telephony/asterisk/asterisk-${AST_VER}.tar.gz
+    tar xvf asterisk-${AST_VER}.tar.gz
+    cd asterisk-${AST_VER}
+    contrib/scripts/get_mp3_source.sh
     ./configure
-    configurar_menuselect
-    make -j$(nproc)
+    make menuselect.makeopts
+    menuselect/menuselect --enable chan_sip --enable res_pjsip --enable res_pjsip_pubsub \
+                          --enable res_pjsip_exten_state --enable res_pjsip_registrar \
+                          --enable format_mp3 menuselect.makeopts
+    make
     make install
     make samples
     make config
     ldconfig
-    systemctl enable asterisk
 }
 
-# ===== CONFIGURAR ARQUIVOS OBRIGATÓRIOS =====
-configurar_arquivos() {
-    log "Garantindo arquivos de configuração..."
-    # manager.conf
-    if [ ! -f /etc/asterisk/manager.conf ]; then
-        cat > /etc/asterisk/manager.conf <<EOF
+config_permissions() {
+    echo "Configurando permissões do Asterisk..."
+    chown -R $AST_USER:$AST_USER /var/{lib,log,spool}/asterisk /usr/lib/asterisk
+    chown -R $AST_USER:$AST_USER /etc/asterisk
+    chmod -R 750 /var/{lib,log,spool}/asterisk /usr/lib/asterisk
+}
+
+config_manager_conf() {
+    echo "Configurando manager.conf..."
+    MANAGER_CONF="/etc/asterisk/manager.conf"
+    cat > "$MANAGER_CONF" <<EOF
 [general]
 enabled = yes
-webenabled = no
-displayconnects = yes
-timestampevents = yes
+webenabled = yes
+port = 5038
+bindaddr = 0.0.0.0
 
-[admin]
-secret = ${SENHA_MANAGER}
+[$AMI_USER]
+secret = $AMI_PASS
 read = all
 write = all
 EOF
-        chown asterisk:asterisk /etc/asterisk/manager.conf
-    fi
-
-    # cdr.conf
-    if [ ! -f /etc/asterisk/cdr.conf ]; then
-        echo "[general]" > /etc/asterisk/cdr.conf
-        echo "enable=yes" >> /etc/asterisk/cdr.conf
-        chown asterisk:asterisk /etc/asterisk/cdr.conf
-    fi
+    chown $AST_USER:$AST_USER "$MANAGER_CONF"
 }
 
-# ===== INSTALAR ISSABEL =====
-instalar_issabel() {
-    log "Instalando Issabel..."
+config_cdr() {
+    echo "Configurando CDR..."
+    cat > /etc/asterisk/cdr.conf <<EOF
+[general]
+enable=yes
+unanswered = yes
+endbeforehexten = no
+initiatedseconds = no
+EOF
+
+    cat > /etc/asterisk/cdr_adaptive_odbc.conf <<EOF
+[adaptive_connection]
+connection=asteriskcdrdb
+table=cdr
+alias start => calldate
+EOF
+
+    cat > /etc/odbc.ini <<EOF
+[MySQL-asteriskcdrdb]
+Description=MySQL connection to CDR
+Driver=MySQL ODBC 8.0 Unicode Driver
+Server=localhost
+Database=asteriskcdrdb
+User=root
+Password=$DB_PASS
+Port=3306
+Socket=/var/run/mysqld/mysqld.sock
+EOF
+
+    cat > /etc/odbcinst.ini <<EOF
+[MySQL ODBC 8.0 Unicode Driver]
+Driver=/usr/lib/x86_64-linux-gnu/odbc/libmyodbc8w.so
+EOF
+}
+
+install_issabel() {
+    echo "Instalando Issabel (adaptado)..."
     cd /usr/src
     git clone https://github.com/rojasrjosee/issabel-debian
     cd issabel-debian
+    sed -i '/asterisk/d' install.sh  # Remove instalação automática do Asterisk
+    sed -i '/yum/d' install.sh       # Remove comandos YUM (CentOS)
+    sed -i '/dnf/d' install.sh
     bash install.sh
 }
 
-# ===== FINALIZAR =====
-finalizar() {
-    log "Instalação concluída!"
-    echo "Acesse o Issabel via http://IP_DO_SERVIDOR"
-    echo "Usuário AMI: admin / Senha: ${SENHA_MANAGER}"
+start_services() {
+    echo "Ativando e iniciando serviços..."
+    systemctl enable asterisk
+    systemctl start asterisk
+    systemctl enable mariadb
+    systemctl start mariadb
 }
 
-# ===== EXECUÇÃO =====
-check_sistema
-instalar_dependencias
-instalar_php74
-criar_usuario_asterisk
-instalar_asterisk
-configurar_arquivos
-instalar_issabel
-finalizar
+# --- Execução ---
+check_root
+install_deps
+install_php74
+create_asterisk_user
+install_asterisk
+config_permissions
+config_manager_conf
+config_cdr
+install_issabel
+start_services
+
+echo "Instalação concluída!"
+echo "AMI User: $AMI_USER / Senha: $AMI_PASS"
+echo "MariaDB root senha: $DB_PASS"

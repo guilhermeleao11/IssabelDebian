@@ -29,7 +29,6 @@ err(){ echo -e "\e[1;31m[ERRO]\e[0m $*" | tee -a "$LOG_FILE"; exit 1; }
 
 # ===== Pré-checagens =====
 [ "$(id -u)" -eq 0 ] || err "Execute como root."
-grep -q 'VERSION_CODENAME=bookworm' /etc/os-release || err "Este script é para Debian 12 (bookworm)."
 ping -c1 -W2 deb.debian.org &>/dev/null || err "Sem acesso à Internet."
 
 log "Iniciando o script de instalação do Issabel no Debian 12"
@@ -280,6 +279,12 @@ menuselect/menuselect \
 log "Compilando e instalando Asterisk..."
 make -j"$(nproc)"
 make install
+
+# Garantir manager.conf mínimo
+if [ ! -f /etc/asterisk/manager.conf ]; then
+  touch /etc/asterisk/manager.conf
+  chown asterisk:asterisk /etc/asterisk/manager.conf
+fi
 
 # ===== Service do Asterisk (systemd) =====
 log "Configurando serviço systemd do Asterisk..."
